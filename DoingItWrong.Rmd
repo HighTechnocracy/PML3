@@ -1,0 +1,116 @@
+---
+title: 'Working Out: You’re Doing it Wrong'
+author: "HT"
+date: "March 16, 2015"
+---
+```{r}
+install.packages("dplyr", repos="http://cran.rstudio.com/")
+library("dplyr")
+install.packages("caret", repos="http://cran.rstudio.com/")
+library("caret")
+```
+
+#Introduction
+With the advent of personal fitness recording devices like the Fitbit, Jawbone, and the Garmin Vevofit, the amount of physical activity data available to researchers is enormous. However, this resource is wasted if it cannot be put to good use. In the past, health behavior modifications have focused on apparent deficiencies in the amount of exercise that people get each day. If an individual was exercising a sufficient amount of time each day, and a sufficient amount of days each week, the advice they could receive to improve their health was limited. With these devices however, advocates can move from the quantity of exercise to its quality--allowing each person access to a personalized trainer who can, for example, help them with their form during strength training.
+
+#Executive Summary
+This analysis uses data collected through various sensors placed on several participants and on a dumbbell they used. Each participant was asked to perform five sets of ten dumbbell curl repetitions. In four of the ten sets, the participants were guided by an expert to perform the motion incorrectly in a specific way (e.g., leaning too far forward or not performing the entire range of motion). One of the five sets was performed with correct form. The question this analysis hopes to answer is: Is there a way to measure and distinguish correctly performed exercises from incorrectly performed exercises.
+
+The analysis uses a random forest algorithm to find the most important variables of the 160 collected and uses it to make predictions against both a validation and test set. The chosen prediction model was able to correctly classify 20 out of 20 cases in the test set, confirming that such predictions are possible--at least in the setting where the correct and incorrect postures/motions exist within a specified range, guided by a professional.
+
+#Get and Process the Data
+The first step of the analysis to retrieve the data from the internet, save it to a local folder and load it into R.
+
+```{r cache=TRUE}
+download.file(url="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile="train_031215.csv", method="curl")
+download.file(url="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile="test_031215.csv", method="curl")
+
+train <- read.csv("train_031215.csv")
+test <- read.csv("test_031215.csv")
+```
+
+Then we divide the data into training and validation sets.
+```{r}
+inTrain <- createDataPartition(y=train$classe, p=0.9, list=FALSE)
+rawTrain <- train[inTrain,]
+vTrain <- train[-inTrain,]
+```
+
+We will need to pare away predictors with little value. To begin, we identify predictors with high numbers of NAs or no measurements at all. After this the dataset only has 53 predictors. 
+
+```{r cache=TRUE}
+x <- sapply(rawTrain, function(x) sum(is.na(x)))
+x <- x[x > 0]
+x <-names(x)
+rawTrain <- rawTrain[,!(names(rawTrain) %in% x)]
+rawTrain <- select(rawTrain, -1, -c(3:7), -c(12:20), -c(43:48), -c(52:61), -c(74:82))
+```
+
+To futher eliminate unnecessary predictors, random forest (from the caret package) was run to determine the most important variables.
+
+```{r eval=FALSE}
+trialRF <- train(classe ~ ., rawTrain, method="rf", importance=TRUE, prox=TRUE)
+save(trialRF, file = "trialRF.RData")
+```
+
+```{r}
+load("trialRF.RData")
+varImp(trialRF)
+rm(trialRF)
+```
+
+Of the top 20 variables listed none after the first 8 have an importance value > 50.0 for any of the 5 classes. So those variables are captured as the maximum number of potential predictors.
+
+Now we look at the signficance values of the remaining predictors.
+
+```{r}
+fit1 <- glm(classe ~ roll_belt + pitch_belt + pitch_forearm + magnet_dumbbell_y + magnet_dumbbell_z + yaw_belt + accel_forearm_x + roll_forearm, data = rawTrain, family="quasibinomial")
+summary(fit1)
+```
+
+A quick test, looking at the significance of the variables in a generalized linear model (family = "quasibinomial" i.e., "logit") reveals that one of them, "magnet_dumbell_y," has no significance in the presence of the other variables, so it to is cut from the prediction process. 
+
+```{r}
+finalTrain <- select(rawTrain, classe, roll_belt, pitch_belt, pitch_forearm, magnet_dumbbell_z, yaw_belt, accel_forearm_x, roll_forearm)
+```
+
+Random Forest was run again in order to create the best route given the new variable set.
+
+```{r eval=FALSE}
+finalRF <- train(classe ~ ., finalTrain, method="rf", importance=TRUE, prox=TRUE, cache=TRUE)
+save(finalRF, file = "finalRF.RData")
+```
+```{r}
+finalRF$finalModel
+```
+
+We can see from the call that the predicted out of sample error rate is 1.25%. So we use the model to predict the values in the validation set:
+
+```{r}
+load("finalRF.RData")
+pred <- predict(finalRF, vTrain)
+vTrain$right <- pred==vTrain$classe
+table(pred, vTrain$classe)
+```
+
+We can see that the chosen model missed only 26 of the 1960 values in the training set, an accuracy rating of ~1.33, pretty close to the predicted rate. Although not perfect, the accuracy is quite good and the model is adopted for predicting the values in the test set. Of the 20 cases in the test set, the chosen model predicted all 20 correctly.
+
+```{r}
+rm(finalRF)
+```
+
+ ============================================================
+ The following code was used to create text files for submitting predictions
+of the test cases to Coursera for evaluation.
+pml_write_files = function(x){
+n = length(x)
+for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+###Citation:
+This dataset is licensed under the Creative Commons license (CC BY-SA). The CC BY-SA license means you can remix, tweak, and build upon this work even for commercial purposes, as long as you credit the authors of the original work and you license your new creations under the identical terms we are licensing to you. This license is often compared to "copyleft" free and open source software licenses. All new works based on this dataset will carry the same license, so any derivatives will also allow commercial use.
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
